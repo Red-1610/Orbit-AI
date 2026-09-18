@@ -31,8 +31,10 @@ export async function POST(req: Request) {
     });
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Unknown error';
+    const isQuotaError = message.includes('insufficient_quota') || message.includes('credit_balance_exhausted');
+
     return new Response(JSON.stringify({ error: message }), {
-      status: 500,
+      status: isQuotaError ? 402 : 500,
       headers: { 'Content-Type': 'application/json' },
     });
   }

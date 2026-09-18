@@ -17,7 +17,7 @@ export const metadata: Metadata = {
   description: "A focused workspace for getting work done with AI agents.",
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html
       lang="en"

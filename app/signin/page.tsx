@@ -1,99 +1,149 @@
 'use client';
 
+import { useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { createClient } from '@/lib/db/client';
 import Link from 'next/link';
-import { ArrowLeft, LockKeyhole, Mail, Sparkles } from 'lucide-react';
-import { FormEvent, useState } from 'react';
 
 export default function SignInPage() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const router = useRouter();
+  const supabase = createClient();
 
-  const handleSubmit = (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    console.log('Sign in attempted', { email, password });
+  const handleSignIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setErrorMsg(null);
+
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      setErrorMsg(error.message);
+      setLoading(false);
+    } else {
+      router.push('/');
+      router.refresh();
+    }
+  };
+
+  const handleSignUp = async () => {
+    setLoading(true);
+    setErrorMsg(null);
+
+    const { error } = await supabase.auth.signUp({
+      email,
+      password,
+    });
+
+    if (error) {
+      setErrorMsg(error.message);
+    } else {
+      setErrorMsg('Check your email for the confirmation link.');
+    }
+    setLoading(false);
+  };
+
+  const handleOAuth = async (provider: 'github' | 'google') => {
+    await supabase.auth.signInWithOAuth({
+      provider,
+      options: {
+        redirectTo: `${window.location.origin}/api/auth/callback`,
+      },
+    });
   };
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-[#f6f8fb] px-4 py-12 text-[#172033]">
-      <div className="w-full max-w-md overflow-hidden rounded-[28px] border border-[#e5eaf1] bg-white shadow-[0_20px_70px_rgba(15,23,42,0.08)]">
-        <div className="bg-[#172033] px-6 py-5 text-white">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="grid size-9 place-items-center rounded-xl bg-white/10 text-[#dbeafe]">
-                <Sparkles size={18} />
-              </div>
-              <div>
-                <p className="text-base font-bold tracking-tight">orbit.ai</p>
-                <p className="text-[10px] uppercase tracking-[.16em] text-slate-300">Secure access</p>
-              </div>
-            </div>
-            <Link href="/" className="inline-flex items-center gap-1 rounded-full border border-white/15 bg-white/5 px-2.5 py-1.5 text-[11px] font-medium text-white/90 transition hover:bg-white/10">
-              <ArrowLeft size={12} /> Home
-            </Link>
-          </div>
+    <main className="flex min-h-screen items-center justify-center p-6 bg-zinc-950 text-white">
+      <div className="w-full max-w-sm space-y-6 border border-zinc-800 p-8 rounded-2xl bg-zinc-900/50 backdrop-blur-sm">
+        <div className="space-y-1">
+          <h1 className="text-xl font-bold tracking-tight">Welcome to Orbit AI</h1>
+          <p className="text-xs text-zinc-400">Sign in to access your agent workspace</p>
         </div>
 
-        <div className="px-6 py-7 sm:px-8">
-          <div className="mb-6">
-            <p className="text-xs font-bold uppercase tracking-[.18em] text-[#2563eb]">Welcome back</p>
-            <h1 className="mt-2 text-3xl font-bold tracking-[-0.04em]">Sign in</h1>
-            <p className="mt-2 text-sm text-[#73819a]">Continue to your workspace and manage your tasks.</p>
+        {errorMsg && (
+          <div className="p-3 bg-red-950/50 border border-red-800 rounded-lg text-xs text-red-300">
+            {errorMsg}
+          </div>
+        )}
+
+        <form onSubmit={handleSignIn} className="space-y-4">
+          <div className="space-y-1">
+            <label className="text-xs text-zinc-400 font-medium">Email</label>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="name@company.com"
+              className="w-full px-3 py-2 text-sm bg-zinc-800/60 border border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <label className="block">
-              <span className="mb-2 flex items-center gap-2 text-xs font-semibold text-[#536176]">
-                <Mail size={14} className="text-[#2563eb]" /> Email
-              </span>
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="you@company.com"
-                className="w-full rounded-xl border border-[#dfe6f0] bg-[#f8fafc] px-3.5 py-3 text-sm text-[#172033] outline-none transition focus:border-[#93b4f5] focus:ring-4 focus:ring-blue-50"
-                required
-              />
-            </label>
-
-            <label className="block">
-              <span className="mb-2 flex items-center gap-2 text-xs font-semibold text-[#536176]">
-                <LockKeyhole size={14} className="text-[#2563eb]" /> Password
-              </span>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="Enter your password"
-                className="w-full rounded-xl border border-[#dfe6f0] bg-[#f8fafc] px-3.5 py-3 text-sm text-[#172033] outline-none transition focus:border-[#93b4f5] focus:ring-4 focus:ring-blue-50"
-                required
-              />
-            </label>
-
-            <div className="flex items-center justify-between text-xs text-[#73819a]">
-              <label className="inline-flex items-center gap-2">
-                <input type="checkbox" className="h-3.5 w-3.5 rounded border-[#dfe6f0] text-[#2563eb]" />
-                Remember me
-              </label>
-              <Link href="/" className="font-semibold text-[#2563eb] hover:text-[#1d4ed8]">
-                Forgot password?
-              </Link>
-            </div>
-
-            <button
-              type="submit"
-              className="w-full rounded-xl bg-[#2563eb] px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-blue-200 transition hover:bg-[#1d4ed8]"
-            >
-              Sign in to workspace
-            </button>
-          </form>
-
-          <div className="mt-6 border-t border-[#edf0f4] pt-5 text-center text-xs text-[#73819a]">
-            Need an account?{' '}
-            <Link href="/" className="font-semibold text-[#2563eb] hover:text-[#1d4ed8]">
-              Request access
-            </Link>
+          <div className="space-y-1">
+            <label className="text-xs text-zinc-400 font-medium">Password</label>
+            <input
+              type="password"
+              required
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••"
+              className="w-full px-3 py-2 text-sm bg-zinc-800/60 border border-zinc-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
           </div>
+
+          <button
+            type="submit"
+            disabled={loading}
+            className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-lg text-sm transition disabled:opacity-50"
+          >
+            {loading ? 'Processing...' : 'Sign In'}
+          </button>
+
+          <button
+            type="button"
+            onClick={handleSignUp}
+            disabled={loading}
+            className="w-full py-2.5 px-4 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 font-medium rounded-lg text-sm transition disabled:opacity-50"
+          >
+            Create Account
+          </button>
+        </form>
+
+        <div className="relative flex items-center justify-center">
+          <div className="border-t border-zinc-800 w-full" />
+          <span className="bg-zinc-900 px-2 text-[10px] uppercase text-zinc-500 tracking-wider absolute">
+            Or continue with
+          </span>
         </div>
+
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            onClick={() => handleOAuth('github')}
+            className="py-2 px-3 border border-zinc-800 rounded-lg hover:bg-zinc-800/60 text-xs font-medium text-zinc-300 transition"
+          >
+            GitHub
+          </button>
+          <button
+            type="button"
+            onClick={() => handleOAuth('google')}
+            className="py-2 px-3 border border-zinc-800 rounded-lg hover:bg-zinc-800/60 text-xs font-medium text-zinc-300 transition"
+          >
+            Google
+          </button>
+        </div>
+
+        <p className="text-center text-xs text-zinc-500 pt-2">
+          <Link href="/landingpage" className="hover:underline">
+            Back to home
+          </Link>
+        </p>
       </div>
     </main>
   );
