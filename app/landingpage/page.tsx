@@ -14,7 +14,6 @@ import {
   FolderKanban,
   LayoutDashboard,
   MoreHorizontal,
-  Paperclip,
   Plus,
   Search,
   Send,
@@ -27,6 +26,7 @@ import {
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/db/client';
+import AttachMenu from '@/components/canvas/ui/Attachmenu';
 
 const Viewpoint = dynamic(() => import('@/components/canvas/Viewpoint'), { ssr: false });
 const DashboardScene = dynamic(() => import('@/components/canvas/scenes/Dashboard'), { ssr: false });
@@ -37,21 +37,54 @@ const suggestions = [
   { icon: '◌', label: 'Draft a communication', prompt: 'Draft a clear update for my team.' },
 ];
 
-const recentTasks = [
-  { title: 'Q3 inventory reconciliation', time: 'Today, 10:42 AM', status: 'Completed', tone: 'green' },
-  { title: 'Customer feedback synthesis', time: 'Yesterday, 4:18 PM', status: 'Completed', tone: 'green' },
-  { title: 'Shipping cost comparison', time: 'Yesterday, 11:06 AM', status: 'In review', tone: 'amber' },
-];
+type RecentTask = {
+  id: string;
+  title: string;
+  time: string;
+  status: string;
+  tone: 'green' | 'amber';
+};
+
+function readFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      if (typeof reader.result === 'string') resolve(reader.result);
+      else reject(new Error('Unable to read attachment.'));
+    };
+    reader.onerror = () => reject(reader.error ?? new Error('Unable to read attachment.'));
+    reader.readAsDataURL(file);
+  });
+}
 
 const supabase = createClient();
 
 export default function AgentPage() {
   const [userName, setUserName] = useState('there');
-  const { messages, sendMessage, status } = useChat({
+  const [userId, setUserId] = useState<string | null>(null);
+  const [recentTasks, setRecentTasks] = useState<RecentTask[]>([]);
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [activeNav, setActiveNav] = useState('Overview');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showAllTasks, setShowAllTasks] = useState(false);
+  const [showHistory, setShowHistory] = useState(false);
+  const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const { messages, sendMessage, setMessages, status } = useChat({
     transport: new DefaultChatTransport({ api: '/api/agent' }),
   });
   const [input, setInput] = useState('');
   const isRunning = status === 'streaming' || status === 'submitted';
+  const visibleTasks = recentTasks
+    .filter((task) => task.title.toLowerCase().includes(searchQuery.toLowerCase()))
+    .slice(0, showAllTasks ? undefined : 5);
+
+  const handleNewTask = () => {
+    setMessages([]);
+    setInput('');
+    setSelectedFile(null);
+    setShowHistory(false);
+    setActiveNav('Overview');
+  };
 
   useEffect(() => {
     let mounted = true;
@@ -60,9 +93,35 @@ export default function AgentPage() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!mounted || !user) return;
 
+      setUserId(user.id);
       const metadata = user.user_metadata as { full_name?: string; name?: string } | undefined;
-      const name = metadata?.full_name || metadata?.name || user.email?.split('@')[0] || 'there';
-      setUserName(name);
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('full_name')
+        .eq('id', user.id)
+        .maybeSingle();
+      const displayName = profile?.full_name || metadata?.full_name || metadata?.name || user.email?.split('@')[0] || 'there';
+      setUserName(displayName);
+
+      const { data: tasks, error } = await supabase
+        .from('tasks')
+        .select('id, label, status, created_at')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(5);
+
+      if (error) {
+        console.error('Unable to load recent tasks:', error.message);
+        return;
+      }
+
+      setRecentTasks(tasks.map((task) => ({
+        id: task.id,
+        title: task.label,
+        time: new Date(task.created_at).toLocaleString(),
+        status: task.status.charAt(0).toUpperCase() + task.status.slice(1),
+        tone: task.status === 'completed' ? 'green' : 'amber',
+      })));
     };
 
     loadUserName();
@@ -72,10 +131,50 @@ export default function AgentPage() {
     };
   }, []);
 
-  const handleSubmit = (event: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!input.trim() || status !== 'ready') return;
-    sendMessage({ text: input });
+
+    const taskTitle = input.trim();
+    let taskId: string | undefined;
+    if (userId) {
+      const { data: task, error } = await supabase
+        .from('tasks')
+        .insert({ user_id: userId, label: taskTitle, status: 'pending' })
+        .select('id, label, status, created_at')
+        .single();
+
+      if (error) {
+        console.error('Unable to save task:', error.message);
+      } else {
+        taskId = task.id;
+        setRecentTasks((tasks) => [
+          {
+            id: task.id,
+            title: task.label,
+            time: new Date(task.created_at).toLocaleString(),
+            status: 'Pending',
+            tone: 'amber' as const,
+          },
+          ...tasks,
+        ].slice(0, 5));
+      }
+    }
+
+    const files = selectedFile
+      ? [{
+          type: 'file' as const,
+          mediaType: selectedFile.type || 'application/octet-stream',
+          name: selectedFile.name,
+          url: await readFileAsDataUrl(selectedFile),
+        }]
+      : undefined;
+
+    sendMessage(
+      { text: input, ...(files ? { files } : {}) },
+      { body: { taskId } },
+    );
+    setSelectedFile(null);
     setInput('');
   };
 
@@ -93,22 +192,22 @@ export default function AgentPage() {
             </div>
           </div>
 
-          <button className="mt-9 flex items-center justify-center gap-2 rounded-xl bg-[#172033] px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-slate-200 transition hover:bg-[#26344d]">
+          <button type="button" onClick={handleNewTask} className="mt-9 flex items-center justify-center gap-2 rounded-xl bg-[#172033] px-4 py-3 text-sm font-semibold text-white shadow-lg shadow-slate-200 transition hover:bg-[#26344d]">
             <Plus size={16} /> New task
           </button>
 
           <nav className="mt-7 space-y-1">
             <p className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[.16em] text-[#a1acbd]">Workspace</p>
-            <NavItem icon={<LayoutDashboard size={17} />} label="Overview" active />
-            <NavItem icon={<FolderKanban size={17} />} label="All tasks" badge="12" />
-            <NavItem icon={<Activity size={17} />} label="Activity" />
-            <NavItem icon={<Users size={17} />} label="Team" />
+            <NavItem icon={<LayoutDashboard size={17} />} label="Overview" active={activeNav === 'Overview'} onClick={() => setActiveNav('Overview')} />
+            <NavItem icon={<FolderKanban size={17} />} label="All tasks" badge={String(recentTasks.length)} active={activeNav === 'All tasks'} onClick={() => { setActiveNav('All tasks'); setShowAllTasks(true); }} />
+            <NavItem icon={<Activity size={17} />} label="Activity" active={activeNav === 'Activity'} onClick={() => setActiveNav('Activity')} />
+            <NavItem icon={<Users size={17} />} label="Team" active={activeNav === 'Team'} onClick={() => setActiveNav('Team')} />
           </nav>
 
           <nav className="mt-8 space-y-1">
             <p className="px-3 pb-2 text-[10px] font-bold uppercase tracking-[.16em] text-[#a1acbd]">Resources</p>
-            <NavItem icon={<FileText size={17} />} label="Knowledge base" />
-            <NavItem icon={<TerminalSquare size={17} />} label="Integrations" />
+            <NavItem icon={<FileText size={17} />} label="Knowledge base" active={activeNav === 'Knowledge base'} onClick={() => setActiveNav('Knowledge base')} />
+            <NavItem icon={<TerminalSquare size={17} />} label="Integrations" active={activeNav === 'Integrations'} onClick={() => setActiveNav('Integrations')} />
           </nav>
 
           <div className="mt-auto rounded-2xl border border-[#e7ebf2] bg-white p-4 shadow-sm">
@@ -122,14 +221,14 @@ export default function AgentPage() {
           <div className="mt-4 flex items-center gap-3 border-t border-[#e5eaf1] px-2 pt-4">
             <div className="grid size-8 place-items-center rounded-full bg-[#dbeafe] text-xs font-bold text-[#1d4ed8]">AR</div>
             <div className="min-w-0 flex-1"><p className="truncate text-xs font-bold">{userName}</p><p className="text-[11px] text-[#8c98aa]">Admin</p></div>
-            <Settings2 size={16} className="text-[#9aa6b8]" />
+            <button type="button" onClick={() => setActiveNav('Settings')} aria-label="Open settings" className="text-[#9aa6b8] transition hover:text-[#536176]"><Settings2 size={16} /></button>
           </div>
         </aside>
 
         <section className="flex min-w-0 flex-1 flex-col">
           <header className="flex h-[72px] items-center justify-between border-b border-[#e5eaf1] bg-white/80 px-5 backdrop-blur sm:px-8">
             <div className="flex items-center gap-3">
-              <div className="relative hidden sm:block"><Search size={16} className="absolute left-3 top-2.5 text-[#9aa6b8]" /><input placeholder="Search tasks..." className="w-56 rounded-lg border border-[#e6eaf0] bg-[#f8fafc] py-2 pl-9 pr-3 text-xs outline-none transition focus:border-blue-300" /></div>
+              <div className="relative hidden sm:block"><Search size={16} className="absolute left-3 top-2.5 text-[#9aa6b8]" /><input value={searchQuery} onChange={(event) => setSearchQuery(event.target.value)} placeholder="Search tasks..." aria-label="Search tasks" className="w-56 rounded-lg border border-[#e6eaf0] bg-[#f8fafc] py-2 pl-9 pr-3 text-xs outline-none transition focus:border-blue-300" /></div>
               <span className="hidden h-5 w-px bg-[#e6eaf0] sm:block" />
               <p className="text-xs font-semibold text-[#8a96a8]">Workspace <span className="mx-1">/</span> <span className="text-[#172033]">Overview</span></p>
             </div>
@@ -138,7 +237,10 @@ export default function AgentPage() {
               <Link href="/signin" className="inline-flex items-center justify-center rounded-lg bg-[#172033] px-3.5 py-2 text-xs font-semibold text-white shadow-sm transition hover:bg-[#26344d]">
                 Sign in
               </Link>
-              <button className="hidden text-[#8a96a8] sm:block"><MoreHorizontal size={19} /></button>
+              <div className="relative">
+                <button type="button" onClick={() => setShowMoreMenu((open) => !open)} aria-label="Open more actions" className="hidden text-[#8a96a8] transition hover:text-[#536176] sm:block"><MoreHorizontal size={19} /></button>
+                {showMoreMenu && <div className="absolute right-0 top-8 z-20 w-36 rounded-xl border border-[#e5eaf1] bg-white p-1.5 text-xs shadow-xl"><button type="button" onClick={() => { setActiveNav('Settings'); setShowMoreMenu(false); }} className="w-full rounded-lg px-3 py-2 text-left font-semibold text-[#536176] hover:bg-[#f3f6fa]">Settings</button></div>}
+              </div>
             </div>
           </header>
 
@@ -154,7 +256,7 @@ export default function AgentPage() {
                           <DashboardScene />
                         </Viewpoint>
                       </div>
-                      <button className="flex items-center gap-2 rounded-lg border border-[#e1e6ee] bg-white px-3 py-2 text-xs font-semibold text-[#536176] shadow-sm"><Clock3 size={14} /> History <ChevronDown size={13} /></button>
+                      <button type="button" onClick={() => setShowHistory((visible) => !visible)} className="flex items-center gap-2 rounded-lg border border-[#e1e6ee] bg-white px-3 py-2 text-xs font-semibold text-[#536176] shadow-sm"><Clock3 size={14} /> History <ChevronDown size={13} className={showHistory ? 'rotate-180 transition-transform' : 'transition-transform'} /></button>
                     </div>
                   </div>
                   <div className="mt-9 grid gap-4 sm:grid-cols-3">
@@ -167,16 +269,16 @@ export default function AgentPage() {
                       <div className="flex items-center justify-between"><div><h2 className="text-base font-bold">Start with a task</h2><p className="mt-1 text-xs text-[#8c98aa]">Tell your agent what you need. It will handle the rest.</p></div><div className="grid size-9 place-items-center rounded-xl bg-[#eff6ff] text-[#2563eb]"><Bot size={19} /></div></div>
                       <form onSubmit={handleSubmit} className="mt-6 rounded-xl border border-[#dce3ed] bg-[#fbfcfe] p-2 transition focus-within:border-[#93b4f5] focus-within:ring-4 focus-within:ring-blue-50">
                         <textarea value={input} onChange={(event) => setInput(event.target.value)} disabled={isRunning} placeholder="What would you like to accomplish?" rows={3} className="w-full resize-none bg-transparent px-3 py-2 text-sm leading-6 text-[#172033] outline-none placeholder:text-[#a4afbe]" />
-                        <div className="flex items-center justify-between border-t border-[#edf0f4] px-2 pt-2"><button type="button" className="flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-semibold text-[#8b97a8] hover:bg-white hover:text-[#536176]"><Paperclip size={15} /> Attach</button><button type="submit" disabled={isRunning || !input.trim()} className="flex items-center gap-2 rounded-lg bg-[#2563eb] px-3.5 py-2 text-xs font-bold text-white shadow-sm shadow-blue-200 transition hover:bg-[#1d4ed8] disabled:cursor-not-allowed disabled:opacity-40">{isRunning ? 'Working...' : 'Run task'} <Send size={13} /></button></div>
+                        <div className="flex items-center justify-between border-t border-[#edf0f4] px-2 pt-2"><AttachMenu onFileSelect={setSelectedFile} /><button type="submit" disabled={isRunning || !input.trim()} className="flex items-center gap-2 rounded-lg bg-[#2563eb] px-3.5 py-2 text-xs font-bold text-white shadow-sm shadow-blue-200 transition hover:bg-[#1d4ed8] disabled:cursor-not-allowed disabled:opacity-40">{isRunning ? 'Working...' : 'Run task'} <Send size={13} /></button></div>
                       </form>
                       <div className="mt-4 flex flex-wrap gap-2">{suggestions.map((suggestion) => <button key={suggestion.label} onClick={() => setInput(suggestion.prompt)} className="rounded-full border border-[#e5eaf1] bg-white px-3 py-1.5 text-[11px] font-semibold text-[#69778b] transition hover:border-blue-200 hover:bg-blue-50 hover:text-[#2563eb]">{suggestion.icon} &nbsp;{suggestion.label}</button>)}</div>
                     </div>
-                    <div className="rounded-2xl border border-[#e5eaf1] bg-white p-5 shadow-[0_8px_30px_rgba(30,60,100,.04)]"><div className="flex items-center justify-between"><h2 className="text-sm font-bold">Recent tasks</h2><button className="text-[11px] font-bold text-[#2563eb]">View all</button></div><div className="mt-4 space-y-1">{recentTasks.map((task) => <div key={task.title} className="group rounded-xl p-3 transition hover:bg-[#f8fafc]"><div className="flex items-start gap-3"><div className={`mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg ${task.tone === 'green' ? 'bg-[#ecfdf3] text-[#16a05d]' : 'bg-[#fff7ed] text-[#ea8a13]'}`}><CheckCircle2 size={14} /></div><div className="min-w-0"><p className="truncate text-xs font-semibold text-[#354258]">{task.title}</p><p className="mt-1 text-[10px] text-[#9aa5b5]">{task.time}</p></div></div><p className={`ml-10 mt-2 text-[10px] font-bold ${task.tone === 'green' ? 'text-[#16a05d]' : 'text-[#d97706]'}`}>{task.status}</p></div>)}</div></div>
+                    <div className="rounded-2xl border border-[#e5eaf1] bg-white p-5 shadow-[0_8px_30px_rgba(30,60,100,.04)]"><div className="flex items-center justify-between"><h2 className="text-sm font-bold">{showHistory ? 'Task history' : 'Recent tasks'}</h2><button type="button" onClick={() => setShowAllTasks((visible) => !visible)} className="text-[11px] font-bold text-[#2563eb]">{showAllTasks ? 'Show recent' : 'View all'}</button></div><div className="mt-4 space-y-1">{visibleTasks.map((task) => <div key={task.id} className="group rounded-xl p-3 transition hover:bg-[#f8fafc]"><div className="flex items-start gap-3"><div className={`mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg ${task.tone === 'green' ? 'bg-[#ecfdf3] text-[#16a05d]' : 'bg-[#fff7ed] text-[#ea8a13]'}`}><CheckCircle2 size={14} /></div><div className="min-w-0"><p className="truncate text-xs font-semibold text-[#354258]">{task.title}</p><p className="mt-1 text-[10px] text-[#9aa5b5]">{task.time}</p></div></div><p className={`ml-10 mt-2 text-[10px] font-bold ${task.tone === 'green' ? 'text-[#16a05d]' : 'text-[#d97706]'}`}>{task.status}</p></div>)}{visibleTasks.length === 0 && <p className="py-4 text-center text-xs text-[#9aa5b5]">No matching tasks.</p>}</div></div>
                   </div>
                   <div className="mt-8 flex items-center gap-3 rounded-xl border border-[#e5eaf1] bg-[#f8fafc] px-4 py-3 text-xs text-[#718096]"><Sparkles size={15} className="text-[#2563eb]" /><span><strong className="text-[#354258]">Tip:</strong> Agents work best with a clear outcome, useful context, and any constraints you have.</span><ArrowUpRight size={14} className="ml-auto" /></div>
                 </>
               ) : (
-                <div className="mx-auto max-w-3xl"><div className="mb-8 flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[.16em] text-[#2563eb]">Live task</p><h1 className="mt-2 text-2xl font-bold tracking-tight">Agent activity</h1></div><div className="flex items-center gap-2 rounded-full bg-[#eff6ff] px-3 py-1.5 text-[11px] font-bold text-[#2563eb]"><span className={`size-1.5 rounded-full ${isRunning ? 'animate-pulse bg-blue-500' : 'bg-green-500'}`} /> {isRunning ? 'Working' : 'Complete'}</div></div><div className="space-y-4">{messages.map((message) => <MessageBubble key={message.id} message={message} />)}</div><form onSubmit={handleSubmit} className="sticky bottom-4 mt-8 flex items-center gap-2 rounded-xl border border-[#dce3ed] bg-white p-2 shadow-xl"><input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Continue the task..." disabled={isRunning} className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-[#a4afbe]" /><button type="submit" disabled={isRunning || !input.trim()} className="grid size-9 place-items-center rounded-lg bg-[#2563eb] text-white disabled:opacity-40"><Send size={15} /></button></form></div>
+                <div className="mx-auto max-w-3xl"><div className="mb-8 flex items-center justify-between"><div><p className="text-xs font-bold uppercase tracking-[.16em] text-[#2563eb]">Live task</p><h1 className="mt-2 text-2xl font-bold tracking-tight">Agent activity</h1></div><div className="flex items-center gap-2 rounded-full bg-[#eff6ff] px-3 py-1.5 text-[11px] font-bold text-[#2563eb]"><span className={`size-1.5 rounded-full ${isRunning ? 'animate-pulse bg-blue-500' : 'bg-green-500'}`} /> {isRunning ? 'Working' : 'Complete'}</div></div><div className="space-y-4">{messages.map((message) => <MessageBubble key={message.id} message={message} />)}</div><form onSubmit={handleSubmit} className="sticky bottom-4 mt-8 flex items-center gap-2 rounded-xl border border-[#dce3ed] bg-white p-2 shadow-xl"><AttachMenu onFileSelect={setSelectedFile} /><input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Continue the task..." disabled={isRunning} className="min-w-0 flex-1 bg-transparent px-3 py-2 text-sm outline-none placeholder:text-[#a4afbe]" /><button type="submit" disabled={isRunning || !input.trim()} className="grid size-9 place-items-center rounded-lg bg-[#2563eb] text-white disabled:opacity-40"><Send size={15} /></button></form></div>
               )}
             </div>
           </div>
@@ -186,8 +288,8 @@ export default function AgentPage() {
   );
 }
 
-function NavItem({ icon, label, active, badge }: { icon: React.ReactNode; label: string; active?: boolean; badge?: string }) {
-  return <button className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-xs font-semibold transition ${active ? 'bg-[#eaf2ff] text-[#2563eb]' : 'text-[#758196] hover:bg-[#f3f6fa] hover:text-[#354258]'}`}>{icon}<span className="flex-1 text-left">{label}</span>{badge && <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[#8c98aa]">{badge}</span>}</button>;
+function NavItem({ icon, label, active, badge, onClick }: { icon: React.ReactNode; label: string; active?: boolean; badge?: string; onClick: () => void }) {
+  return <button type="button" onClick={onClick} className={`flex w-full items-center gap-3 rounded-lg px-3 py-2.5 text-xs font-semibold transition ${active ? 'bg-[#eaf2ff] text-[#2563eb]' : 'text-[#758196] hover:bg-[#f3f6fa] hover:text-[#354258]'}`}>{icon}<span className="flex-1 text-left">{label}</span>{badge && <span className="rounded-full bg-white px-1.5 py-0.5 text-[10px] text-[#8c98aa]">{badge}</span>}</button>;
 }
 
 function MetricCard({ label, value, detail, icon, color }: { label: string; value: string; detail: string; icon: React.ReactNode; color: 'blue' | 'green' | 'orange' }) {
