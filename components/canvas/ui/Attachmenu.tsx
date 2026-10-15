@@ -80,7 +80,7 @@ export default function AttachMenu({ onFileSelect }: AttachMenuProps) {
             className="flex items-center gap-2.5 w-full px-2.5 py-2 text-xs text-zinc-300 hover:bg-zinc-800 rounded-lg transition-colors text-left"
           >
             <ImageIcon className="w-4 h-4 text-emerald-400" />
-            Upload Image
+            Upload image
           </button>
           <button
             type="button"
@@ -88,7 +88,7 @@ export default function AttachMenu({ onFileSelect }: AttachMenuProps) {
             className="flex items-center gap-2.5 w-full px-2.5 py-2 text-xs text-zinc-300 hover:bg-zinc-800 rounded-lg transition-colors text-left"
           >
             <FileText className="w-4 h-4 text-blue-400" />
-            Upload Document
+            Upload document
           </button>
         </div>
       )}
